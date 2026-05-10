@@ -7,6 +7,17 @@
 
 import type { BankConfig } from "./bank.js";
 
+export interface SynthesisConfig {
+  // Synthesis frequency: 'never' disables synthesis
+  frequency?: "daily" | "weekly" | "monthly" | "never";
+  // Confidence threshold for insights (0-1)
+  confidenceThreshold?: number;
+  // Maximum insights to generate per synthesis run
+  maxInsights?: number;
+  // Enable para-memory export of insights
+  enableParaMemoryExport?: boolean;
+}
+
 export interface InstanceConfig {
   hindsightApiUrl: string;
   hindsightApiKeyRef?: string;
@@ -14,6 +25,8 @@ export interface InstanceConfig {
   recallBudget?: "low" | "mid" | "high";
   autoRetain?: boolean;
   defaultContext?: string;
+  // Phase 2: Synthesis configuration
+  synthesis?: SynthesisConfig;
 }
 
 export interface BankInitConfig {
@@ -34,6 +47,8 @@ export interface CompanyConfig {
   bankGranularityOverride?: Array<"company" | "agent" | "user">;
   disableAutoRetain?: boolean;
   bankInit?: BankInitConfig;
+  // Phase 2: Synthesis overrides
+  synthesisOverride?: SynthesisConfig;
 }
 
 export interface EffectiveConfig extends InstanceConfig {
