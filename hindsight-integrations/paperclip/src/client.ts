@@ -66,12 +66,15 @@ export class HindsightClient {
     bankId: string,
     content: string,
     documentId?: string,
-    metadata?: Record<string, string>
+    metadata?: Record<string, string>,
+    context = "paperclip"
   ): Promise<void> {
     const path = `/v1/default/banks/${encodeURIComponent(bankId)}/memories`;
     const item: Record<string, unknown> = {
       content,
-      context: "paperclip",
+      // Always set context — improves extraction quality (best practice)
+      context,
+      created_at: new Date().toISOString(),
     };
     if (documentId) item["document_id"] = documentId;
     if (metadata) item["metadata"] = metadata;

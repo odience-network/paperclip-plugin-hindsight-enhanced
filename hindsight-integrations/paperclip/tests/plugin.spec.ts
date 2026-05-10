@@ -313,6 +313,117 @@ describe("hindsight_retain tool", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Best practices: context + created_at in retained memories
+// ---------------------------------------------------------------------------
+
+describe("retention best practices", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("includes context and created_at in every retained memory", async () => {
+    const fetchMock = mockFetch([{ url: /memories$/, body: { success: true } }]);
+    vi.stubGlobal("fetch", fetchMock);
+    const harness = buildHarness({ ...DEFAULT_CONFIG, defaultContext: "my-app" });
+    await setupPlugin(harness);
+
+    await harness.emit(
+      "agent.run.finished",
+      { agentId: "ag-1", runId: "run-1", output: "Did some work." },
+      { companyId: "co-1" }
+    );
+
+    const call = fetchMock.mock.calls.find(([url]: [string]) => /memories$/.test(url));
+    const body = JSON.parse(call?.[1]?.body as string) as {
+      items: Array<{ content: string; context?: string; created_at?: string }>;
+    };
+    expect(body.items[0]?.context).toBe("my-app");
+    expect(body.items[0]?.created_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Company-level config override via plugin state
+// ---------------------------------------------------------------------------
+
+describe("company config override", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("respects disableAutoRetain company override", async () => {
+    const fetchMock = mockFetch([{ url: /memories$/, body: { success: true } }]);
+    vi.stubGlobal("fetch", fetchMock);
+    const harness = buildHarness();
+
+    // Set company config in plugin state
+    await harness.ctx.state.set(
+      { scopeKind: "company", scopeId: "co-1", stateKey: "hindsight-config" },
+      { disableAutoRetain: true }
+    );
+
+    await setupPlugin(harness);
+
+    await harness.emit(
+      "agent.run.finished",
+      { agentId: "ag-1", runId: "run-1", output: "Some work done." },
+      { companyId: "co-1" }
+    );
+
+    // Should NOT retain because company config disabled it
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("uses contextOverride from company config for retention", async () => {
+    const fetchMock = mockFetch([{ url: /memories$/, body: { success: true } }]);
+    vi.stubGlobal("fetch", fetchMock);
+    const harness = buildHarness();
+
+    await harness.ctx.state.set(
+      { scopeKind: "company", scopeId: "co-1", stateKey: "hindsight-config" },
+      { contextOverride: "cms-platform" }
+    );
+
+    await setupPlugin(harness);
+
+    await harness.emit(
+      "agent.run.finished",
+      { agentId: "ag-1", runId: "run-1", output: "Shipped CMS feature." },
+      { companyId: "co-1" }
+    );
+
+    const call = fetchMock.mock.calls.find(([url]: [string]) => /memories$/.test(url));
+    const body = JSON.parse(call?.[1]?.body as string) as {
+      items: Array<{ content: string; context?: string }>;
+    };
+    expect(body.items[0]?.context).toBe("cms-platform");
+  });
+
+  it("uses recallBudgetOverride from company config", async () => {
+    const fetchMock = mockFetch([{ url: /recall/, body: { results: [] } }]);
+    vi.stubGlobal("fetch", fetchMock);
+    const harness = buildHarness();
+
+    await harness.ctx.state.set(
+      { scopeKind: "company", scopeId: "co-1", stateKey: "hindsight-config" },
+      { recallBudgetOverride: "high" }
+    );
+
+    await setupPlugin(harness);
+
+    await harness.emit(
+      "agent.run.started",
+      { agentId: "ag-1", runId: "run-1", issueTitle: "Fix performance issue" },
+      { companyId: "co-1" }
+    );
+
+    const recallCall = fetchMock.mock.calls.find(([url]: [string]) => url.includes("recall"));
+    const body = JSON.parse(recallCall?.[1]?.body as string) as { budget: string };
+    expect(body.budget).toBe("high");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // onValidateConfig
 // ---------------------------------------------------------------------------
 

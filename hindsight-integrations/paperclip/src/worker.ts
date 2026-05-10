@@ -10,24 +10,23 @@
  * Agent tools (callable mid-run):
  *   hindsight_recall(query)   → search memory, returns relevant context
  *   hindsight_retain(content) → store content in memory immediately
+ *
+ * Configuration hierarchy:
+ *   Instance config  — set in Settings → Plugins → Hindsight Memory (Paperclip admin)
+ *   Company config   — stored in plugin state per company, set via admin UI or API
+ *                      (scopeKind: "company", stateKey: "hindsight-config")
  */
 
 import { definePlugin, runWorker } from "@paperclipai/plugin-sdk";
-import type { ToolRunContext } from "@paperclipai/plugin-sdk";
+import type { PluginContext, ToolRunContext } from "@paperclipai/plugin-sdk";
 import { HindsightClient, formatMemories } from "./client.js";
 import { deriveBankId } from "./bank.js";
-
-interface PluginConfig {
-  hindsightApiUrl: string;
-  hindsightApiKeyRef?: string;
-  bankGranularity?: Array<"company" | "agent" | "user">;
-  recallBudget?: "low" | "mid" | "high";
-  autoRetain?: boolean;
-}
+import { mergeConfigs, type InstanceConfig, type CompanyConfig } from "./company-config.js";
 
 interface RunStartedPayload {
   agentId: string;
   runId: string;
+  userId?: string;
   issueTitle?: string;
   issueDescription?: string;
 }
@@ -35,68 +34,65 @@ interface RunStartedPayload {
 interface RunFinishedPayload {
   agentId: string;
   runId: string;
+  userId?: string;
   output?: string;
   result?: string;
 }
 
-async function getConfig(ctx: {
-  config: { get(): Promise<Record<string, unknown>> };
-}): Promise<PluginConfig> {
-  return (await ctx.config.get()) as unknown as PluginConfig;
+async function getInstanceConfig(ctx: PluginContext): Promise<InstanceConfig> {
+  return (await ctx.config.get()) as unknown as InstanceConfig;
 }
 
-async function resolveApiKey(
-  ctx: { secrets: { resolve(ref: string): Promise<string | null> } },
-  config: PluginConfig
-): Promise<string | undefined> {
+async function getCompanyConfig(
+  ctx: PluginContext,
+  companyId: string
+): Promise<CompanyConfig | null> {
+  try {
+    const raw = await ctx.state.get({
+      scopeKind: "company",
+      scopeId: companyId,
+      stateKey: "hindsight-config",
+    });
+    return raw ? (raw as unknown as CompanyConfig) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveApiKey(ctx: PluginContext, config: InstanceConfig): Promise<string | undefined> {
   if (!config.hindsightApiKeyRef) return undefined;
   const resolved = await ctx.secrets.resolve(config.hindsightApiKeyRef);
   return resolved ?? undefined;
 }
 
-async function resolveUserIdFromActiveIssue(
-  ctx: { issues: { getActive(): Promise<{ originId?: string } | null> } },
-  config: PluginConfig
-): Promise<string | undefined> {
-  // Only resolve user ID if user granularity is enabled
-  if (!config.bankGranularity?.includes("user")) return undefined;
-
-  try {
-    const activeIssue = await ctx.issues.getActive();
-    if (!activeIssue?.originId) return undefined;
-
-    // Format: "slack::<channel>::<email>" or similar
-    const parts = activeIssue.originId.split("::");
-    const email = parts[parts.length - 1];
-    return email && email.includes("@") ? email : undefined;
-  } catch (err) {
-    return undefined;
-  }
-}
-
 const plugin = definePlugin({
   async setup(ctx) {
-    ctx.logger.info("Hindsight memory plugin starting");
+    ctx.logger.info("Hindsight memory plugin starting (v0.3.0)");
 
     // ---------------------------------------------------------------------------
     // agent.run.started — recall memories and cache them for this run
     // ---------------------------------------------------------------------------
     ctx.events.on("agent.run.started", async (event) => {
       const payload = event.payload as RunStartedPayload;
-      const config = await getConfig(ctx);
-      const { agentId, runId, issueTitle, issueDescription } = payload;
       const companyId = event.companyId;
-      const userId = await resolveUserIdFromActiveIssue(ctx, config);
+      const { agentId, runId, userId, issueTitle, issueDescription } = payload;
+
+      const instanceConfig = await getInstanceConfig(ctx);
+      const companyConfig = await getCompanyConfig(ctx, companyId);
+      const config = mergeConfigs(instanceConfig, companyConfig);
 
       const query = [issueTitle, issueDescription].filter(Boolean).join("\n");
       if (!query.trim()) return;
 
       try {
-        const apiKey = await resolveApiKey(ctx, config);
-        const client = new HindsightClient(config.hindsightApiUrl, apiKey);
-        const bankId = deriveBankId({ companyId, agentId, userId }, config);
+        const apiKey = await resolveApiKey(ctx, instanceConfig);
+        const client = new HindsightClient(instanceConfig.hindsightApiUrl, apiKey);
+        const bankId = deriveBankId(
+          { companyId, agentId, userId },
+          { bankGranularity: config.effectiveBankGranularity }
+        );
 
-        const response = await client.recall(bankId, query, config.recallBudget ?? "mid");
+        const response = await client.recall(bankId, query, config.effectiveRecallBudget);
 
         const memories = formatMemories(response.results);
         if (memories) {
@@ -108,6 +104,7 @@ const plugin = definePlugin({
             runId,
             bankId,
             count: response.results.length,
+            companyOverride: companyConfig !== null,
           });
         }
       } catch (err) {
@@ -124,24 +121,40 @@ const plugin = definePlugin({
     // ---------------------------------------------------------------------------
     ctx.events.on("agent.run.finished", async (event) => {
       const payload = event.payload as RunFinishedPayload;
-      const config = await getConfig(ctx);
-
-      if (config.autoRetain === false) return;
-
-      const { agentId, runId, output, result } = payload;
       const companyId = event.companyId;
-      const userId = await resolveUserIdFromActiveIssue(ctx, config);
+
+      const instanceConfig = await getInstanceConfig(ctx);
+      const companyConfig = await getCompanyConfig(ctx, companyId);
+      const config = mergeConfigs(instanceConfig, companyConfig);
+
+      if (!config.effectiveAutoRetain) return;
+
+      const { agentId, runId, userId, output, result } = payload;
       const content = output ?? result;
 
       if (!content?.trim()) return;
 
       try {
-        const apiKey = await resolveApiKey(ctx, config);
-        const client = new HindsightClient(config.hindsightApiUrl, apiKey);
-        const bankId = deriveBankId({ companyId, agentId, userId }, config);
+        const apiKey = await resolveApiKey(ctx, instanceConfig);
+        const client = new HindsightClient(instanceConfig.hindsightApiUrl, apiKey);
+        const bankId = deriveBankId(
+          { companyId, agentId, userId },
+          { bankGranularity: config.effectiveBankGranularity }
+        );
 
-        await client.retain(bankId, content, runId, { agentId, companyId, runId });
-        ctx.logger.info("Retained run output to memory", { runId, bankId });
+        // runId as stable document_id prevents duplicate retention on retry
+        await client.retain(
+          bankId,
+          content,
+          runId,
+          { agentId, companyId, runId },
+          config.effectiveContext
+        );
+        ctx.logger.info("Retained run output to memory", {
+          runId,
+          bankId,
+          context: config.effectiveContext,
+        });
       } catch (err) {
         ctx.logger.warn("Failed to retain run output", {
           runId,
@@ -168,11 +181,13 @@ const plugin = definePlugin({
       },
       async (params: unknown, runCtx: ToolRunContext) => {
         const { query } = params as { query: string };
-        const config = await getConfig(ctx);
-        const userId = await resolveUserIdFromActiveIssue(ctx, config);
+        const companyId = runCtx.companyId;
+        const instanceConfig = await getInstanceConfig(ctx);
+        const companyConfig = await getCompanyConfig(ctx, companyId);
+        const config = mergeConfigs(instanceConfig, companyConfig);
         const bankId = deriveBankId(
-          { companyId: runCtx.companyId, agentId: runCtx.agentId, userId },
-          config
+          { companyId, agentId: runCtx.agentId },
+          { bankGranularity: config.effectiveBankGranularity }
         );
 
         // Return cached memories from run start if available
@@ -187,9 +202,9 @@ const plugin = definePlugin({
 
         // Live recall fallback
         try {
-          const apiKey = await resolveApiKey(ctx, config);
-          const client = new HindsightClient(config.hindsightApiUrl, apiKey);
-          const response = await client.recall(bankId, query, config.recallBudget ?? "mid");
+          const apiKey = await resolveApiKey(ctx, instanceConfig);
+          const client = new HindsightClient(instanceConfig.hindsightApiUrl, apiKey);
+          const response = await client.recall(bankId, query, config.effectiveRecallBudget);
           const memories = formatMemories(response.results);
           return { content: memories || "No relevant memories found." };
         } catch (err) {
@@ -220,21 +235,25 @@ const plugin = definePlugin({
       },
       async (params: unknown, runCtx: ToolRunContext) => {
         const { content } = params as { content: string };
-        const config = await getConfig(ctx);
-        const userId = await resolveUserIdFromActiveIssue(ctx, config);
+        const companyId = runCtx.companyId;
+        const instanceConfig = await getInstanceConfig(ctx);
+        const companyConfig = await getCompanyConfig(ctx, companyId);
+        const config = mergeConfigs(instanceConfig, companyConfig);
         const bankId = deriveBankId(
-          { companyId: runCtx.companyId, agentId: runCtx.agentId, userId },
-          config
+          { companyId, agentId: runCtx.agentId },
+          { bankGranularity: config.effectiveBankGranularity }
         );
 
         try {
-          const apiKey = await resolveApiKey(ctx, config);
-          const client = new HindsightClient(config.hindsightApiUrl, apiKey);
-          await client.retain(bankId, content, undefined, {
-            agentId: runCtx.agentId,
-            companyId: runCtx.companyId,
-            runId: runCtx.runId,
-          });
+          const apiKey = await resolveApiKey(ctx, instanceConfig);
+          const client = new HindsightClient(instanceConfig.hindsightApiUrl, apiKey);
+          await client.retain(
+            bankId,
+            content,
+            undefined,
+            { agentId: runCtx.agentId, companyId, runId: runCtx.runId },
+            config.effectiveContext
+          );
           return { content: "Memory saved." };
         } catch (err) {
           return { content: `Failed to save memory: ${String(err)}` };
@@ -250,7 +269,7 @@ const plugin = definePlugin({
   },
 
   async onValidateConfig(config) {
-    const c = config as Partial<PluginConfig>;
+    const c = config as Partial<InstanceConfig>;
     if (!c.hindsightApiUrl?.trim()) {
       return { ok: false, errors: ["hindsightApiUrl is required"] };
     }

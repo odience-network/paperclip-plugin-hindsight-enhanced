@@ -1,9 +1,53 @@
 import type { PaperclipPluginManifestV1 } from "@paperclipai/plugin-sdk";
 
+/**
+ * companyConfigSchema describes per-company overrides stored in plugin state
+ * (scopeKind: "company", stateKey: "hindsight-config"). The structure is validated
+ * at the application layer against this schema.
+ *
+ * Fields: recallBudgetOverride, autoRetainOverride, contextOverride,
+ *         bankGranularityOverride, disableAutoRetain
+ */
+export const COMPANY_CONFIG_SCHEMA = {
+  type: "object",
+  properties: {
+    recallBudgetOverride: {
+      type: "string",
+      title: "Recall Budget Override",
+      description: "Override the instance recall budget for this company.",
+      enum: ["low", "mid", "high"],
+    },
+    autoRetainOverride: {
+      type: "boolean",
+      title: "Auto-retain Override",
+      description: "Override the instance auto-retain setting for this company.",
+    },
+    contextOverride: {
+      type: "string",
+      title: "Memory Context Override",
+      description:
+        "Override the context tag for memories retained by agents in this company. Example: 'acme-cms-team'.",
+    },
+    bankGranularityOverride: {
+      type: "array",
+      title: "Bank Granularity Override",
+      description: "Override memory isolation granularity for this company.",
+      items: { type: "string", enum: ["company", "agent", "user"] },
+    },
+    disableAutoRetain: {
+      type: "boolean",
+      title: "Disable Auto-retain",
+      description:
+        "Set to true to fully disable auto-retain for all agents in this company, regardless of instance settings.",
+      default: false,
+    },
+  },
+} as const;
+
 const manifest: PaperclipPluginManifestV1 = {
   id: "paperclip-plugin-hindsight",
   apiVersion: 1,
-  version: "0.2.0",
+  version: "0.3.0",
   displayName: "Hindsight Memory",
   author: "Vectorize <support@vectorize.io>",
   description:
@@ -59,6 +103,13 @@ const manifest: PaperclipPluginManifestV1 = {
         title: "Auto-retain on Run Finished",
         description: "Automatically retain agent run output to Hindsight when a run completes.",
         default: true,
+      },
+      defaultContext: {
+        type: "string",
+        title: "Default Memory Context",
+        description:
+          "Context tag applied to all retained memories instance-wide. Improves extraction quality. Example: 'paperclip-agents'.",
+        default: "paperclip",
       },
     },
   },
