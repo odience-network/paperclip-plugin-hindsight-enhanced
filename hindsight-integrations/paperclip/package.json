@@ -1,7 +1,7 @@
 {
   "name": "@vectorize-io/hindsight-paperclip",
-  "version": "0.4.0",
-  "description": "Persistent long-term memory for Paperclip agents via Hindsight — recall before every heartbeat, retain after every run. Phase 1.5: Memory bank initialization with domain-specific missions and entity types.",
+  "version": "0.5.0",
+  "description": "Persistent long-term memory for Paperclip agents via Hindsight — recall before every heartbeat, retain after every run. Phase 2: Synthesis job infrastructure for long-term insights.",
   "type": "module",
   "paperclipPlugin": {
     "manifest": "./dist/manifest.js",

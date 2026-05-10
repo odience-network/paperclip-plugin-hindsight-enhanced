@@ -80,17 +80,57 @@ export const COMPANY_CONFIG_SCHEMA = {
         },
       },
     },
+    synthesisOverride: {
+      type: "object",
+      title: "Synthesis Configuration (Phase 2)",
+      description:
+        "Configure memory synthesis job settings for this company. Enables long-term insight generation and pattern detection.",
+      properties: {
+        frequency: {
+          type: "string",
+          title: "Synthesis Frequency",
+          description:
+            "How often to run synthesis jobs. 'never' disables synthesis for this company.",
+          enum: ["daily", "weekly", "monthly", "never"],
+          default: "weekly",
+        },
+        confidenceThreshold: {
+          type: "number",
+          title: "Confidence Threshold",
+          description:
+            "Minimum confidence (0-1) for insights to be stored. Higher values filter out lower-confidence patterns.",
+          minimum: 0,
+          maximum: 1,
+          default: 0.7,
+        },
+        maxInsights: {
+          type: "integer",
+          title: "Max Insights",
+          description: "Maximum number of insights to generate per synthesis run.",
+          minimum: 1,
+          maximum: 500,
+          default: 50,
+        },
+        enableParaMemoryExport: {
+          type: "boolean",
+          title: "Export to Para-Memory",
+          description:
+            "Automatically export high-confidence insights to the para-memory system for long-term knowledge organization.",
+          default: true,
+        },
+      },
+    },
   },
 } as const;
 
 const manifest: PaperclipPluginManifestV1 = {
   id: "paperclip-plugin-hindsight",
   apiVersion: 1,
-  version: "0.4.0",
+  version: "0.5.0",
   displayName: "Hindsight Memory",
   author: "Vectorize <support@vectorize.io>",
   description:
-    "Persistent long-term memory for Paperclip agents. Automatically recalls relevant context before each run and retains agent output after — so every agent gets smarter over time.",
+    "Persistent long-term memory for Paperclip agents. Automatically recalls relevant context before each run, retains agent output after, and synthesizes long-term insights — so every agent gets smarter over time.",
   categories: ["automation"],
   capabilities: [
     "events.subscribe",

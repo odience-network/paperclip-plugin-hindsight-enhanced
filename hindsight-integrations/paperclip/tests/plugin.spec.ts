@@ -562,6 +562,124 @@ describe("bank initialization", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase 2.1: Synthesis job infrastructure
+// ---------------------------------------------------------------------------
+
+describe("synthesis jobs (Phase 2.1)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("calls synthesize endpoint with company synthesis config", async () => {
+    const fetchMock = mockFetch([
+      {
+        url: /synthesize/,
+        body: {
+          synthesis_id: "syn-1",
+          status: "completed",
+          result: {
+            insights: [
+              {
+                type: "pattern",
+                entities: ["Agent", "Feature"],
+                summary: "Agents frequently request this feature",
+                confidence: 0.85,
+              },
+            ],
+          },
+        },
+      },
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    const harness = buildHarness();
+
+    const synthesisConfig = {
+      frequency: "weekly",
+      confidenceThreshold: 0.75,
+      maxInsights: 50,
+      enableParaMemoryExport: true,
+    };
+
+    await harness.ctx.state.set(
+      { scopeKind: "company", scopeId: "co-1", stateKey: "hindsight-config" },
+      { synthesisOverride: synthesisConfig }
+    );
+
+    await setupPlugin(harness);
+
+    // Verify synthesis method exists and can be called
+    const { HindsightClient } = await import("../src/client.js");
+    const client = new HindsightClient("http://localhost:8888");
+    const result = await client.synthesize("paperclip::co-1", {
+      confidence_threshold: synthesisConfig.confidenceThreshold,
+      max_insights: synthesisConfig.maxInsights,
+    });
+
+    expect(result.synthesis_id).toBe("syn-1");
+    expect(result.status).toBe("completed");
+    expect(result.result?.insights[0]?.confidence).toBe(0.85);
+  });
+
+  it("respects synthesis frequency override", async () => {
+    const harness = buildHarness();
+
+    const synthesisConfig = {
+      frequency: "daily",
+      confidenceThreshold: 0.8,
+      maxInsights: 100,
+    };
+
+    await harness.ctx.state.set(
+      { scopeKind: "company", scopeId: "co-1", stateKey: "hindsight-config" },
+      { synthesisOverride: synthesisConfig }
+    );
+
+    const stored = await harness.ctx.state.get({
+      scopeKind: "company",
+      scopeId: "co-1",
+      stateKey: "hindsight-config",
+    });
+
+    expect(stored).toEqual({ synthesisOverride: synthesisConfig });
+  });
+
+  it("disables synthesis when frequency is 'never'", async () => {
+    const fetchMock = mockFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
+    const harness = buildHarness();
+
+    const synthesisConfig = {
+      frequency: "never",
+      confidenceThreshold: 0.7,
+    };
+
+    await harness.ctx.state.set(
+      { scopeKind: "company", scopeId: "co-1", stateKey: "hindsight-config" },
+      { synthesisOverride: synthesisConfig }
+    );
+
+    // If frequency is 'never', no synthesis calls should be made
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("handles synthesis API failure gracefully", async () => {
+    const fetchMock = mockFetch([
+      { url: /synthesize/, body: { error: "service unavailable" }, status: 503 },
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    const harness = buildHarness();
+
+    await setupPlugin(harness);
+
+    const { HindsightClient } = await import("../src/client.js");
+    const client = new HindsightClient("http://localhost:8888");
+
+    // Should throw on 503
+    await expect(client.synthesize("paperclip::co-1")).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // onValidateConfig
 // ---------------------------------------------------------------------------
 

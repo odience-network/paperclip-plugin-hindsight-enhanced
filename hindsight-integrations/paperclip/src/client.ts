@@ -13,6 +13,28 @@ export interface RecallResponse {
   results: Memory[];
 }
 
+export interface SynthesisResult {
+  id?: string;
+  insights: Array<{
+    type: "entity_trend" | "pattern" | "risk" | "opportunity" | "relationship";
+    entities: string[];
+    summary: string;
+    confidence: number;
+    supporting_memories?: string[];
+  }>;
+  synthesis_metadata?: {
+    batch_size: number;
+    memory_count: number;
+    synthesis_duration_ms: number;
+  };
+}
+
+export interface SynthesisResponse {
+  synthesis_id: string;
+  status: "completed" | "in_progress";
+  result?: SynthesisResult;
+}
+
 export class HindsightClient {
   private readonly baseUrl: string;
   private readonly token: string | undefined;
@@ -93,6 +115,24 @@ export class HindsightClient {
   ): Promise<void> {
     const path = `/v1/default/banks/${encodeURIComponent(bankId)}/init`;
     await this.request("POST", path, config);
+  }
+
+  async synthesize(
+    bankId: string,
+    options?: {
+      entity_types?: string[];
+      confidence_threshold?: number;
+      max_insights?: number;
+      async?: boolean;
+    }
+  ): Promise<SynthesisResponse> {
+    const path = `/v1/default/banks/${encodeURIComponent(bankId)}/memories/synthesize`;
+    return this.request<SynthesisResponse>("POST", path, {
+      entity_types: options?.entity_types,
+      confidence_threshold: options?.confidence_threshold ?? 0.7,
+      max_insights: options?.max_insights ?? 50,
+      async: options?.async ?? false,
+    });
   }
 
   async health(): Promise<boolean> {
