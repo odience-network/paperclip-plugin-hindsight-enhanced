@@ -81,6 +81,20 @@ export class HindsightClient {
     await this.request("POST", path, { items: [item], async: true });
   }
 
+  async initializeBank(
+    bankId: string,
+    config: {
+      retain_mission?: string;
+      observations_mission?: string;
+      reflect_mission?: string;
+      entity_types?: string[];
+      disposition_traits?: string[];
+    }
+  ): Promise<void> {
+    const path = `/v1/default/banks/${encodeURIComponent(bankId)}/init`;
+    await this.request("POST", path, config);
+  }
+
   async health(): Promise<boolean> {
     try {
       const resp = await fetch(`${this.baseUrl}/health`, {

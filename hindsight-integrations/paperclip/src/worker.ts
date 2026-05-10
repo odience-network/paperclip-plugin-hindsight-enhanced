@@ -67,10 +67,10 @@ async function resolveApiKey(ctx: PluginContext, config: InstanceConfig): Promis
 
 const plugin = definePlugin({
   async setup(ctx) {
-    ctx.logger.info("Hindsight memory plugin starting (v0.3.0)");
+    ctx.logger.info("Hindsight memory plugin starting (v0.4.0)");
 
     // ---------------------------------------------------------------------------
-    // agent.run.started — recall memories and cache them for this run
+    // agent.run.started — initialize bank on first use, then recall memories
     // ---------------------------------------------------------------------------
     ctx.events.on("agent.run.started", async (event) => {
       const payload = event.payload as RunStartedPayload;
@@ -80,6 +80,47 @@ const plugin = definePlugin({
       const instanceConfig = await getInstanceConfig(ctx);
       const companyConfig = await getCompanyConfig(ctx, companyId);
       const config = mergeConfigs(instanceConfig, companyConfig);
+
+      // Initialize bank on first use if company config specifies bank init settings
+      if (companyConfig?.bankInit) {
+        const bankId = deriveBankId(
+          { companyId, agentId, userId },
+          { bankGranularity: config.effectiveBankGranularity }
+        );
+
+        const initKey = `bank-initialized::${bankId}`;
+        const alreadyInitialized = await ctx.state.get({
+          scopeKind: "company",
+          scopeId: companyId,
+          stateKey: initKey,
+        });
+
+        if (!alreadyInitialized) {
+          try {
+            const apiKey = await resolveApiKey(ctx, instanceConfig);
+            const client = new HindsightClient(instanceConfig.hindsightApiUrl, apiKey);
+            await client.initializeBank(bankId, companyConfig.bankInit);
+            await ctx.state.set(
+              { scopeKind: "company", scopeId: companyId, stateKey: initKey },
+              true
+            );
+            ctx.logger.info("Initialized memory bank with best practices", {
+              bankId,
+              hasRetainMission: !!companyConfig.bankInit.retain_mission,
+              hasObservationsMission: !!companyConfig.bankInit.observations_mission,
+              hasReflectMission: !!companyConfig.bankInit.reflect_mission,
+              entityTypeCount: companyConfig.bankInit.entity_types?.length ?? 0,
+              traitCount: companyConfig.bankInit.disposition_traits?.length ?? 0,
+            });
+          } catch (err) {
+            ctx.logger.warn("Failed to initialize bank with missions and entity types", {
+              bankId,
+              error: String(err),
+            });
+            // Non-fatal: continue with standard recall
+          }
+        }
+      }
 
       const query = [issueTitle, issueDescription].filter(Boolean).join("\n");
       if (!query.trim()) return;

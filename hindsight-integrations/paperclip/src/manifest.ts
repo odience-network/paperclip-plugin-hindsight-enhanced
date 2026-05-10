@@ -41,13 +41,52 @@ export const COMPANY_CONFIG_SCHEMA = {
         "Set to true to fully disable auto-retain for all agents in this company, regardless of instance settings.",
       default: false,
     },
+    bankInit: {
+      type: "object",
+      title: "Bank Initialization",
+      description:
+        "Configure memory bank missions, entity types, and disposition traits for domain-specific extraction and synthesis.",
+      properties: {
+        retain_mission: {
+          type: "string",
+          title: "Retain Mission",
+          description:
+            "Instructions for extracting and indexing facts. Example: 'Extract decisions, dependencies, and technical constraints from agent runs.'",
+        },
+        observations_mission: {
+          type: "string",
+          title: "Observations Mission",
+          description:
+            "Instructions for entity extraction and relationship mapping. Example: 'Identify agents, features, users, and their interactions.'",
+        },
+        reflect_mission: {
+          type: "string",
+          title: "Reflect Mission",
+          description:
+            "Instructions for cross-memory synthesis and insight generation. Example: 'Synthesize patterns across multiple runs to identify domain expertise.'",
+        },
+        entity_types: {
+          type: "array",
+          title: "Entity Types",
+          description: "Domain-specific entity types for extraction. Example: ['Agent', 'Feature', 'User', 'Decision'].",
+          items: { type: "string" },
+        },
+        disposition_traits: {
+          type: "array",
+          title: "Disposition Traits",
+          description:
+            "Traits shaping memory synthesis style. Example: ['skepticism', 'literalism', 'empathy'].",
+          items: { type: "string" },
+        },
+      },
+    },
   },
 } as const;
 
 const manifest: PaperclipPluginManifestV1 = {
   id: "paperclip-plugin-hindsight",
   apiVersion: 1,
-  version: "0.3.0",
+  version: "0.4.0",
   displayName: "Hindsight Memory",
   author: "Vectorize <support@vectorize.io>",
   description:

@@ -16,12 +16,24 @@ export interface InstanceConfig {
   defaultContext?: string;
 }
 
+export interface BankInitConfig {
+  // Mission configurations for extraction and synthesis
+  retain_mission?: string;
+  observations_mission?: string;
+  reflect_mission?: string;
+  // Entity types for domain-specific extraction
+  entity_types?: string[];
+  // Disposition traits (e.g., "skepticism", "literalism", "empathy")
+  disposition_traits?: string[];
+}
+
 export interface CompanyConfig {
   recallBudgetOverride?: "low" | "mid" | "high";
   autoRetainOverride?: boolean;
   contextOverride?: string;
   bankGranularityOverride?: Array<"company" | "agent" | "user">;
   disableAutoRetain?: boolean;
+  bankInit?: BankInitConfig;
 }
 
 export interface EffectiveConfig extends InstanceConfig {

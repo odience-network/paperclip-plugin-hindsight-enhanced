@@ -424,6 +424,144 @@ describe("company config override", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Bank initialization — Phase 1.5 best practices
+// ---------------------------------------------------------------------------
+
+describe("bank initialization", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("initializes bank with missions on first run when company config specifies", async () => {
+    const fetchMock = mockFetch([
+      { url: /init/, body: { success: true } },
+      { url: /recall/, body: { results: [] } },
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    const harness = buildHarness();
+
+    const bankInit = {
+      retain_mission: "Extract decisions and constraints",
+      observations_mission: "Identify agents and features",
+      reflect_mission: "Synthesize patterns across runs",
+      entity_types: ["Agent", "Feature", "Decision"],
+      disposition_traits: ["skepticism", "literalism"],
+    };
+
+    await harness.ctx.state.set(
+      { scopeKind: "company", scopeId: "co-1", stateKey: "hindsight-config" },
+      { bankInit }
+    );
+
+    await setupPlugin(harness);
+
+    await harness.emit(
+      "agent.run.started",
+      { agentId: "ag-1", runId: "run-1", issueTitle: "Fix bug" },
+      { companyId: "co-1" }
+    );
+
+    const initCall = fetchMock.mock.calls.find(([url]: [string]) => /init/.test(url));
+    expect(initCall).toBeDefined();
+    const body = JSON.parse(initCall?.[1]?.body as string);
+    expect(body.retain_mission).toBe("Extract decisions and constraints");
+    expect(body.entity_types).toContain("Agent");
+    expect(body.disposition_traits).toContain("skepticism");
+  });
+
+  it("only initializes bank once per bankId", async () => {
+    const fetchMock = mockFetch([
+      { url: /init/, body: { success: true } },
+      { url: /recall/, body: { results: [] } },
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    const harness = buildHarness();
+
+    const bankInit = {
+      retain_mission: "Extract facts",
+      entity_types: ["Agent"],
+    };
+
+    await harness.ctx.state.set(
+      { scopeKind: "company", scopeId: "co-1", stateKey: "hindsight-config" },
+      { bankInit }
+    );
+
+    await setupPlugin(harness);
+
+    // First run
+    await harness.emit(
+      "agent.run.started",
+      { agentId: "ag-1", runId: "run-1", issueTitle: "Fix bug" },
+      { companyId: "co-1" }
+    );
+
+    const initCallsAfterFirst = fetchMock.mock.calls.filter(([url]: [string]) => /init/.test(url))
+      .length;
+
+    // Second run with same agent
+    await harness.emit(
+      "agent.run.started",
+      { agentId: "ag-1", runId: "run-2", issueTitle: "Another task" },
+      { companyId: "co-1" }
+    );
+
+    const initCallsAfterSecond = fetchMock.mock.calls.filter(([url]: [string]) => /init/.test(url))
+      .length;
+
+    // Should be same (no new init call)
+    expect(initCallsAfterSecond).toBe(initCallsAfterFirst);
+  });
+
+  it("skips bank init when company config has no bankInit", async () => {
+    const fetchMock = mockFetch([{ url: /recall/, body: { results: [] } }]);
+    vi.stubGlobal("fetch", fetchMock);
+    const harness = buildHarness();
+    await setupPlugin(harness);
+
+    await harness.emit(
+      "agent.run.started",
+      { agentId: "ag-1", runId: "run-1", issueTitle: "Fix bug" },
+      { companyId: "co-1" }
+    );
+
+    const initCall = fetchMock.mock.calls.find(([url]: [string]) => /init/.test(url));
+    expect(initCall).toBeUndefined();
+  });
+
+  it("continues on bank init failure (non-fatal)", async () => {
+    const fetchMock = mockFetch([
+      { url: /init/, body: { error: "Bank init failed" }, status: 400 },
+      { url: /recall/, body: { results: [{ text: "Some memory" }] } },
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    const harness = buildHarness();
+
+    const bankInit = { retain_mission: "Extract facts" };
+
+    await harness.ctx.state.set(
+      { scopeKind: "company", scopeId: "co-1", stateKey: "hindsight-config" },
+      { bankInit }
+    );
+
+    await setupPlugin(harness);
+
+    // Should not throw despite init failure
+    await expect(
+      harness.emit(
+        "agent.run.started",
+        { agentId: "ag-1", runId: "run-1", issueTitle: "Fix bug" },
+        { companyId: "co-1" }
+      )
+    ).resolves.not.toThrow();
+
+    // Recall should still work
+    const recallCall = fetchMock.mock.calls.find(([url]: [string]) => /recall/.test(url));
+    expect(recallCall).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // onValidateConfig
 // ---------------------------------------------------------------------------
 
