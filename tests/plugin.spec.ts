@@ -562,6 +562,152 @@ describe("bank initialization", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase 2.2: Insight extraction and indexing
+// ---------------------------------------------------------------------------
+
+describe("insight extraction (Phase 2.2)", () => {
+  it("extracts insights from synthesis result above confidence threshold", async () => {
+    const { extractInsights } = await import("../src/insights.js");
+
+    const synResult = {
+      insights: [
+        { type: "pattern" as const, entities: ["Agent", "Feature"], summary: "Agents prefer TypeScript", confidence: 0.9, supporting_memories: [] },
+        { type: "risk" as const, entities: ["Bug"], summary: "Error rate elevated", confidence: 0.4 },
+        { type: "opportunity" as const, entities: ["Performance"], summary: "Caching could improve speed", confidence: 0.75 },
+      ],
+    };
+
+    const extracted = extractInsights(synResult, {
+      synthesisId: "syn-1",
+      bankId: "paperclip::co-1",
+      companyId: "co-1",
+      context: "test",
+      confidenceThreshold: 0.7,
+    });
+
+    expect(extracted).toHaveLength(2); // risk (0.4) filtered out
+    expect(extracted[0]?.type).toBe("pattern");
+    expect(extracted[0]?.confidence).toBe(0.9);
+    expect(extracted[1]?.type).toBe("opportunity");
+  });
+
+  it("merges new insights into existing index without duplicates", async () => {
+    const { extractInsights, mergeInsightIndex } = await import("../src/insights.js");
+
+    const synResult1 = {
+      insights: [
+        { type: "pattern" as const, entities: ["Agent"], summary: "First insight", confidence: 0.85 },
+      ],
+    };
+    const synResult2 = {
+      insights: [
+        { type: "risk" as const, entities: ["Bug"], summary: "Second insight", confidence: 0.8 },
+      ],
+    };
+
+    const ins1 = extractInsights(synResult1, { synthesisId: "syn-1", bankId: "b", companyId: "co-1", context: "x", confidenceThreshold: 0.7 });
+    const ins2 = extractInsights(synResult2, { synthesisId: "syn-2", bankId: "b", companyId: "co-1", context: "x", confidenceThreshold: 0.7 });
+
+    const index1 = mergeInsightIndex(null, ins1);
+    const index2 = mergeInsightIndex(index1, ins2);
+
+    expect(index2.total_count).toBe(2);
+    expect(index2.insights.some((i) => i.type === "pattern")).toBe(true);
+    expect(index2.insights.some((i) => i.type === "risk")).toBe(true);
+  });
+
+  it("replaces insights from same synthesis_id on re-merge", async () => {
+    const { extractInsights, mergeInsightIndex } = await import("../src/insights.js");
+
+    const synResult = {
+      insights: [
+        { type: "pattern" as const, entities: ["Agent"], summary: "Updated insight", confidence: 0.9 },
+      ],
+    };
+
+    const ins1 = extractInsights(synResult, { synthesisId: "syn-1", bankId: "b", companyId: "co-1", context: "x", confidenceThreshold: 0.7 });
+    const index1 = mergeInsightIndex(null, ins1);
+
+    // Re-synthesize with same ID
+    const ins1b = extractInsights(synResult, { synthesisId: "syn-1", bankId: "b", companyId: "co-1", context: "x", confidenceThreshold: 0.7 });
+    const index2 = mergeInsightIndex(index1, ins1b);
+
+    // Count stays at 1 — same synthesis_id replaces old entry
+    expect(index2.total_count).toBe(1);
+  });
+
+  it("formats insights with type and confidence", async () => {
+    const { extractInsights, formatInsights, mergeInsightIndex } = await import("../src/insights.js");
+
+    const synResult = {
+      insights: [
+        { type: "pattern" as const, entities: ["TypeScript", "Agent"], summary: "Agents prefer TS", confidence: 0.92 },
+      ],
+    };
+
+    const ins = extractInsights(synResult, { synthesisId: "syn-1", bankId: "b", companyId: "co-1", context: "x" });
+    const index = mergeInsightIndex(null, ins);
+    const formatted = formatInsights(index);
+
+    expect(formatted).toContain("PATTERN");
+    expect(formatted).toContain("92%");
+    expect(formatted).toContain("TypeScript");
+  });
+});
+
+describe("hindsight_insights tool (Phase 2.2)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns no insights message when no synthesis has run", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+    const harness = buildHarness();
+    await setupPlugin(harness);
+
+    const result = await harness.executeTool(
+      "hindsight_insights",
+      {},
+      { agentId: "ag-1", runId: "run-1", companyId: "co-1", projectId: "proj-1" }
+    );
+
+    expect((result as { content: string }).content).toContain("No synthesis insights available");
+  });
+
+  it("returns formatted insights when index is populated", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+    const harness = buildHarness();
+    await setupPlugin(harness);
+
+    // Pre-populate insight index in state
+    const { extractInsights, mergeInsightIndex } = await import("../src/insights.js");
+    const synResult = {
+      insights: [
+        { type: "risk" as const, entities: ["Auth", "Bug"], summary: "Auth errors are increasing", confidence: 0.88 },
+      ],
+    };
+    // Synthesis uses company-scope bank: "paperclip::co-1"
+    const companyBankId = "paperclip::co-1";
+    const ins = extractInsights(synResult, { synthesisId: "syn-1", bankId: companyBankId, companyId: "co-1", context: "x", confidenceThreshold: 0.7 });
+    const index = mergeInsightIndex(null, ins);
+
+    await harness.ctx.state.set(
+      { scopeKind: "company", scopeId: "co-1", stateKey: `insight-index::${companyBankId}` },
+      index
+    );
+
+    const result = await harness.executeTool(
+      "hindsight_insights",
+      { type: "risk" },
+      { agentId: "ag-1", runId: "run-1", companyId: "co-1", projectId: "proj-1" }
+    );
+
+    expect((result as { content: string }).content).toContain("RISK");
+    expect((result as { content: string }).content).toContain("Auth errors");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Phase 2.1: Synthesis job infrastructure
 // ---------------------------------------------------------------------------
 

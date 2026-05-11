@@ -126,7 +126,7 @@ export const COMPANY_CONFIG_SCHEMA = {
 const manifest: PaperclipPluginManifestV1 = {
   id: "paperclip-plugin-hindsight",
   apiVersion: 1,
-  version: "0.5.0",
+  version: "0.6.0",
   displayName: "Hindsight Memory",
   author: "Vectorize <support@vectorize.io>",
   description:
@@ -221,6 +221,35 @@ const manifest: PaperclipPluginManifestV1 = {
           content: {
             type: "string",
             description: "The content to store in memory",
+          },
+        },
+      },
+    },
+    {
+      name: "hindsight_insights",
+      displayName: "Query Synthesis Insights",
+      description:
+        "Retrieve indexed long-term insights synthesized from past agent runs. Surfaces patterns, risks, opportunities, and trends detected across the company's memory bank.",
+      parametersSchema: {
+        type: "object",
+        properties: {
+          type: {
+            type: "string",
+            description:
+              "Filter by insight type: entity_trend, pattern, risk, opportunity, relationship",
+            enum: ["entity_trend", "pattern", "risk", "opportunity", "relationship"],
+          },
+          entity: {
+            type: "string",
+            description: "Filter insights mentioning a specific entity (partial match)",
+          },
+          min_confidence: {
+            type: "number",
+            description: "Minimum confidence threshold (0-1). Default: 0.7",
+          },
+          limit: {
+            type: "integer",
+            description: "Maximum number of insights to return. Default: 10",
           },
         },
       },

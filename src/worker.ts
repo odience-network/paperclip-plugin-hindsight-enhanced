@@ -4,12 +4,14 @@
  * Gives Paperclip agents persistent long-term memory via Hindsight.
  *
  * Lifecycle:
- *   agent.run.started  → recall relevant memories, store in plugin state for the run
- *   agent.run.finished → retain agent output to Hindsight (if autoRetain is enabled)
+ *   agent.run.started   → recall relevant memories, store in plugin state for the run
+ *   agent.run.finished  → retain agent output to Hindsight (if autoRetain is enabled)
+ *   synthesis.trigger   → synthesize memories and index insights per company (Phase 2)
  *
  * Agent tools (callable mid-run):
- *   hindsight_recall(query)   → search memory, returns relevant context
- *   hindsight_retain(content) → store content in memory immediately
+ *   hindsight_recall(query)            → search memory, returns relevant context
+ *   hindsight_retain(content)          → store content in memory immediately
+ *   hindsight_insights(type?, entity?) → query indexed synthesis insights (Phase 2.2)
  *
  * Configuration hierarchy:
  *   Instance config  — set in Settings → Plugins → Hindsight Memory (Paperclip admin)
@@ -22,6 +24,13 @@ import type { PluginContext, ToolRunContext } from "@paperclipai/plugin-sdk";
 import { HindsightClient, formatMemories } from "./client.js";
 import { deriveBankId } from "./bank.js";
 import { mergeConfigs, type InstanceConfig, type CompanyConfig } from "./company-config.js";
+import {
+  extractInsights,
+  mergeInsightIndex,
+  formatInsights,
+  type InsightType,
+  type InsightIndex,
+} from "./insights.js";
 
 interface RunStartedPayload {
   agentId: string;
@@ -67,7 +76,7 @@ async function resolveApiKey(ctx: PluginContext, config: InstanceConfig): Promis
 
 const plugin = definePlugin({
   async setup(ctx) {
-    ctx.logger.info("Hindsight memory plugin starting (v0.4.0)");
+    ctx.logger.info("Hindsight memory plugin starting (v0.5.0)");
 
     // ---------------------------------------------------------------------------
     // agent.run.started — initialize bank on first use, then recall memories
@@ -301,6 +310,158 @@ const plugin = definePlugin({
         }
       }
     );
+
+    // ---------------------------------------------------------------------------
+    // Tool: hindsight_insights — Phase 2.2 indexed insight retrieval
+    // ---------------------------------------------------------------------------
+    ctx.tools.register(
+      "hindsight_insights",
+      {
+        displayName: "Query Synthesis Insights",
+        description:
+          "Retrieve indexed long-term insights synthesized from past agent runs. Filter by type (pattern, risk, opportunity, entity_trend, relationship) or entity name.",
+        parametersSchema: {
+          type: "object",
+          properties: {
+            type: {
+              type: "string",
+              description:
+                "Filter by insight type: entity_trend, pattern, risk, opportunity, relationship",
+              enum: ["entity_trend", "pattern", "risk", "opportunity", "relationship"],
+            },
+            entity: {
+              type: "string",
+              description: "Filter insights mentioning a specific entity (partial match)",
+            },
+            min_confidence: {
+              type: "number",
+              description: "Minimum confidence threshold (0-1). Default: 0.7",
+            },
+            limit: {
+              type: "integer",
+              description: "Maximum number of insights to return. Default: 10",
+            },
+          },
+        },
+      },
+      async (params: unknown, runCtx: ToolRunContext) => {
+        const { type, entity, min_confidence, limit } = params as {
+          type?: InsightType;
+          entity?: string;
+          min_confidence?: number;
+          limit?: number;
+        };
+        const companyId = runCtx.companyId;
+        // Synthesis insights are indexed at company level (not per-agent)
+        const bankId = deriveBankId(
+          { companyId, agentId: "company-synthesis" },
+          { bankGranularity: ["company"] }
+        );
+
+        const indexKey = `insight-index::${bankId}`;
+        const raw = await ctx.state.get({
+          scopeKind: "company",
+          scopeId: companyId,
+          stateKey: indexKey,
+        });
+
+        if (!raw) {
+          return {
+            content:
+              "No synthesis insights available yet. Synthesis runs automatically based on company configuration.",
+          };
+        }
+
+        const index = raw as unknown as InsightIndex;
+        const formatted = formatInsights(index, {
+          type,
+          entity,
+          minConfidence: min_confidence ?? 0.7,
+          limit: limit ?? 10,
+        });
+
+        if (!formatted) {
+          return { content: "No insights match the specified filters." };
+        }
+
+        return {
+          content: `## Synthesis Insights\n_${index.total_count} total | last synthesized: ${index.last_synthesized_at}_\n\n${formatted}`,
+        };
+      }
+    );
+
+    // ---------------------------------------------------------------------------
+    // Phase 2.2: Synthesis job — triggered by scheduled event
+    // ---------------------------------------------------------------------------
+    ctx.events.on("plugin.hindsight.synthesis.trigger", async (event) => {
+      const companyId = event.companyId;
+
+      const instanceConfig = await getInstanceConfig(ctx);
+      const companyConfig = await getCompanyConfig(ctx, companyId);
+      const config = mergeConfigs(instanceConfig, companyConfig);
+
+      const synthConfig = companyConfig?.synthesisOverride ?? instanceConfig.synthesis;
+
+      // Skip synthesis if disabled
+      if (synthConfig?.frequency === "never") return;
+
+      // Use company bank (company-level scope for synthesis)
+      const bankId = deriveBankId(
+        { companyId, agentId: "company-synthesis" },
+        { bankGranularity: ["company"] }
+      );
+
+      try {
+        const apiKey = await resolveApiKey(ctx, instanceConfig);
+        const client = new HindsightClient(instanceConfig.hindsightApiUrl, apiKey);
+        const synthesisResp = await client.synthesize(bankId, {
+          confidence_threshold: synthConfig?.confidenceThreshold ?? 0.7,
+          max_insights: synthConfig?.maxInsights ?? 50,
+        });
+
+        if (synthesisResp.result) {
+          const newInsights = extractInsights(synthesisResp.result, {
+            synthesisId: synthesisResp.synthesis_id,
+            bankId,
+            companyId,
+            context: config.effectiveContext,
+            confidenceThreshold: synthConfig?.confidenceThreshold ?? 0.7,
+          });
+
+          if (newInsights.length > 0) {
+            const indexKey = `insight-index::${bankId}`;
+            const existing = await ctx.state.get({
+              scopeKind: "company",
+              scopeId: companyId,
+              stateKey: indexKey,
+            });
+
+            const updated = mergeInsightIndex(
+              existing as InsightIndex | null,
+              newInsights
+            );
+
+            await ctx.state.set(
+              { scopeKind: "company", scopeId: companyId, stateKey: indexKey },
+              updated
+            );
+
+            ctx.logger.info("Synthesis complete — insight index updated", {
+              companyId,
+              bankId,
+              newInsights: newInsights.length,
+              totalIndexed: updated.total_count,
+              synthesisId: synthesisResp.synthesis_id,
+            });
+          }
+        }
+      } catch (err) {
+        ctx.logger.warn("Synthesis job failed (non-fatal)", {
+          companyId,
+          error: String(err),
+        });
+      }
+    });
 
     ctx.logger.info("Hindsight memory plugin ready");
   },
