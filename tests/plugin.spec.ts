@@ -562,6 +562,66 @@ describe("bank initialization", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase 2.3: Para-memory integration
+// ---------------------------------------------------------------------------
+
+describe("para-memory export (Phase 2.3)", () => {
+  it("converts high-confidence insights to para-memory entries", async () => {
+    const { insightToParaEntry, filterParaExportCandidates } = await import("../src/para-memory.js");
+    const { extractInsights } = await import("../src/insights.js");
+
+    const synResult = {
+      insights: [
+        { type: "risk" as const, entities: ["Auth"], summary: "Auth errors increasing", confidence: 0.92 },
+        { type: "pattern" as const, entities: ["Deploy"], summary: "Deploys often fail on Mondays", confidence: 0.62 },
+      ],
+    };
+
+    const insights = extractInsights(synResult, {
+      synthesisId: "syn-1", bankId: "paperclip::co-1", companyId: "co-1", context: "x", confidenceThreshold: 0.5,
+    });
+
+    const candidates = filterParaExportCandidates(insights, 0.8);
+    expect(candidates).toHaveLength(1); // only 0.92 qualifies
+    expect(candidates[0]?.type).toBe("risk");
+
+    const entry = insightToParaEntry(candidates[0]!);
+    expect(entry.type).toBe("feedback"); // risk → feedback in para
+    expect(entry.body).toContain("Auth errors");
+    expect(entry.body).toContain("confidence");
+    expect(entry.confidence).toBe(0.92);
+  });
+
+  it("builds para-memory store and deduplicates on re-export", async () => {
+    const { insightToParaEntry, filterParaExportCandidates, buildParaMemoryStore } = await import("../src/para-memory.js");
+    const { extractInsights } = await import("../src/insights.js");
+
+    const makeSynResult = (summary: string) => ({
+      insights: [
+        { type: "opportunity" as const, entities: ["Cache"], summary, confidence: 0.85 },
+      ],
+    });
+
+    const ins1 = extractInsights(makeSynResult("Cache hit rate is low"), {
+      synthesisId: "syn-1", bankId: "b", companyId: "co-1", context: "x", confidenceThreshold: 0.7,
+    });
+    const ins2 = extractInsights(makeSynResult("Cache improved by 30%"), {
+      synthesisId: "syn-1", bankId: "b", companyId: "co-1", context: "x", confidenceThreshold: 0.7,
+    });
+
+    const entry1 = insightToParaEntry(ins1[0]!);
+    const entry2 = insightToParaEntry(ins2[0]!);
+
+    const store1 = buildParaMemoryStore(null, [entry1]);
+    const store2 = buildParaMemoryStore(store1, [entry2]);
+
+    // Same synthesis_id replaces old entry
+    expect(store2.total_exported).toBe(1);
+    expect(store2.entries[0]?.body).toContain("Cache improved");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Phase 2.2: Insight extraction and indexing
 // ---------------------------------------------------------------------------
 

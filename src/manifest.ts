@@ -126,7 +126,7 @@ export const COMPANY_CONFIG_SCHEMA = {
 const manifest: PaperclipPluginManifestV1 = {
   id: "paperclip-plugin-hindsight",
   apiVersion: 1,
-  version: "0.6.0",
+  version: "0.7.0",
   displayName: "Hindsight Memory",
   author: "Vectorize <support@vectorize.io>",
   description:

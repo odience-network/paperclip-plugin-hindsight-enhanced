@@ -31,6 +31,12 @@ import {
   type InsightType,
   type InsightIndex,
 } from "./insights.js";
+import {
+  insightToParaEntry,
+  filterParaExportCandidates,
+  buildParaMemoryStore,
+  type ParaMemoryStore,
+} from "./para-memory.js";
 
 interface RunStartedPayload {
   agentId: string;
@@ -453,6 +459,33 @@ const plugin = definePlugin({
               totalIndexed: updated.total_count,
               synthesisId: synthesisResp.synthesis_id,
             });
+
+            // Phase 2.3: Para-memory export for high-confidence insights
+            if (synthConfig?.enableParaMemoryExport !== false) {
+              const exportCandidates = filterParaExportCandidates(newInsights, 0.8);
+              if (exportCandidates.length > 0) {
+                const paraEntries = exportCandidates.map(insightToParaEntry);
+                const paraStoreKey = `para-memory-entries::${bankId}`;
+                const existingPara = await ctx.state.get({
+                  scopeKind: "company",
+                  scopeId: companyId,
+                  stateKey: paraStoreKey,
+                });
+                const paraStore = buildParaMemoryStore(
+                  existingPara as ParaMemoryStore | null,
+                  paraEntries
+                );
+                await ctx.state.set(
+                  { scopeKind: "company", scopeId: companyId, stateKey: paraStoreKey },
+                  paraStore
+                );
+                ctx.logger.info("Para-memory export complete", {
+                  companyId,
+                  exported: paraEntries.length,
+                  totalStored: paraStore.total_exported,
+                });
+              }
+            }
           }
         }
       } catch (err) {
