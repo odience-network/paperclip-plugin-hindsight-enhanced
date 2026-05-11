@@ -126,7 +126,7 @@ export const COMPANY_CONFIG_SCHEMA = {
 const manifest: PaperclipPluginManifestV1 = {
   id: "paperclip-plugin-hindsight",
   apiVersion: 1,
-  version: "0.7.0",
+  version: "0.8.0",
   displayName: "Hindsight Memory",
   author: "Vectorize <support@vectorize.io>",
   description:
@@ -189,6 +189,42 @@ const manifest: PaperclipPluginManifestV1 = {
         description:
           "Context tag applied to all retained memories instance-wide. Improves extraction quality. Example: 'paperclip-agents'.",
         default: "paperclip",
+      },
+      synthesis: {
+        type: "object",
+        title: "Synthesis Configuration (Phase 2)",
+        description:
+          "Configure automated memory synthesis for long-term insight generation. Company-level overrides take precedence.",
+        properties: {
+          frequency: {
+            type: "string",
+            title: "Default Synthesis Frequency",
+            description:
+              "How often to run synthesis jobs across all companies. 'never' disables synthesis instance-wide.",
+            enum: ["daily", "weekly", "monthly", "never"],
+            default: "weekly",
+          },
+          confidenceThreshold: {
+            type: "number",
+            title: "Default Confidence Threshold",
+            description:
+              "Minimum confidence (0-1) for insights to be stored. Can be overridden per company.",
+            default: 0.7,
+          },
+          maxInsights: {
+            type: "integer",
+            title: "Default Max Insights",
+            description: "Maximum insights to generate per synthesis run. Can be overridden per company.",
+            default: 50,
+          },
+          enableParaMemoryExport: {
+            type: "boolean",
+            title: "Enable Para-Memory Export",
+            description:
+              "Automatically export high-confidence insights (≥0.8) to para-memory for long-term knowledge organization.",
+            default: true,
+          },
+        },
       },
     },
   },

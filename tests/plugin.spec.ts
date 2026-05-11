@@ -562,6 +562,78 @@ describe("bank initialization", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase 2.4: Insight-driven agent pre-briefing
+// ---------------------------------------------------------------------------
+
+describe("agent pre-briefing with insights (Phase 2.4)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("includes active risks in run context when insight index has risks", async () => {
+    const fetchMock = mockFetch([
+      { url: /recall/, body: { results: [{ text: "User prefers TypeScript" }] } },
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    const harness = buildHarness();
+    await setupPlugin(harness);
+
+    // Pre-populate insight index with a risk
+    const { extractInsights, mergeInsightIndex } = await import("../src/insights.js");
+    const riskInsight = extractInsights(
+      { insights: [{ type: "risk" as const, entities: ["Auth"], summary: "Auth failures spiking on deploys", confidence: 0.91 }] },
+      { synthesisId: "syn-1", bankId: "paperclip::co-1", companyId: "co-1", context: "x", confidenceThreshold: 0.7 }
+    );
+    const index = mergeInsightIndex(null, riskInsight);
+    await harness.ctx.state.set(
+      { scopeKind: "company", scopeId: "co-1", stateKey: "insight-index::paperclip::co-1" },
+      index
+    );
+
+    await harness.emit(
+      "agent.run.started",
+      { agentId: "ag-1", runId: "run-1", issueTitle: "Deploy fix" },
+      { companyId: "co-1" }
+    );
+
+    const state = harness.getState({
+      scopeKind: "run",
+      scopeId: "run-1",
+      stateKey: "recalled-memories",
+    });
+
+    // Should include risk heading and memory
+    expect(state).toContain("Risks");
+    expect(state).toContain("Auth failures");
+    expect(state).toContain("TypeScript");
+  });
+
+  it("includes only memories when no insight index exists", async () => {
+    const fetchMock = mockFetch([
+      { url: /recall/, body: { results: [{ text: "Dark mode preference" }] } },
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    const harness = buildHarness();
+    await setupPlugin(harness);
+
+    await harness.emit(
+      "agent.run.started",
+      { agentId: "ag-1", runId: "run-1", issueTitle: "Update UI" },
+      { companyId: "co-1" }
+    );
+
+    const state = harness.getState({
+      scopeKind: "run",
+      scopeId: "run-1",
+      stateKey: "recalled-memories",
+    });
+
+    expect(state).toContain("Dark mode");
+    expect(state).not.toContain("Active Risks");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Phase 2.3: Para-memory integration
 // ---------------------------------------------------------------------------
 

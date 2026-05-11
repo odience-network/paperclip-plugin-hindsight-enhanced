@@ -82,7 +82,7 @@ async function resolveApiKey(ctx: PluginContext, config: InstanceConfig): Promis
 
 const plugin = definePlugin({
   async setup(ctx) {
-    ctx.logger.info("Hindsight memory plugin starting (v0.5.0)");
+    ctx.logger.info("Hindsight memory plugin starting (v0.8.0)");
 
     // ---------------------------------------------------------------------------
     // agent.run.started — initialize bank on first use, then recall memories
@@ -151,15 +151,44 @@ const plugin = definePlugin({
         const response = await client.recall(bankId, query, config.effectiveRecallBudget);
 
         const memories = formatMemories(response.results);
-        if (memories) {
+
+        // Phase 2.4: Agent pre-briefing — prepend high-priority insights to recalled memories
+        const companyBankId = deriveBankId(
+          { companyId, agentId: "company-synthesis" },
+          { bankGranularity: ["company"] }
+        );
+        const insightIndexKey = `insight-index::${companyBankId}`;
+        const insightRaw = await ctx.state.get({
+          scopeKind: "company",
+          scopeId: companyId,
+          stateKey: insightIndexKey,
+        });
+
+        let contextParts: string[] = [];
+
+        if (insightRaw) {
+          const insightIndex = insightRaw as InsightIndex;
+          // Surface active risks and top patterns as a pre-briefing
+          const riskBrief = formatInsights(insightIndex, { type: "risk", minConfidence: 0.8, limit: 3 });
+          const patternBrief = formatInsights(insightIndex, { type: "pattern", minConfidence: 0.75, limit: 3 });
+
+          if (riskBrief) contextParts.push(`## ⚠️ Active Risks\n${riskBrief}`);
+          if (patternBrief) contextParts.push(`## 📊 Known Patterns\n${patternBrief}`);
+        }
+
+        if (memories) contextParts.push(`## Relevant Memories\n${memories}`);
+
+        const fullContext = contextParts.join("\n\n");
+        if (fullContext) {
           await ctx.state.set(
             { scopeKind: "run", scopeId: runId, stateKey: "recalled-memories" },
-            memories
+            fullContext
           );
-          ctx.logger.info("Recalled memories for run", {
+          ctx.logger.info("Recalled memories and insights for run", {
             runId,
             bankId,
-            count: response.results.length,
+            memoryCount: response.results.length,
+            hasInsights: !!insightRaw,
             companyOverride: companyConfig !== null,
           });
         }
